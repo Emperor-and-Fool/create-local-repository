@@ -1,4 +1,4 @@
-#!/bin/bash
+ #!/bin/bash
 
  
 
@@ -48,8 +48,16 @@ print_dirpath_blue() {
     echo -e "\e[33m$user_input\e[0m"  # Print the user input in yellow
 }
 
-
- 
+# Function to prompt for sudo if needed
+run_with_sudo() {
+    if [ "$EUID" -ne 0 ]; then
+        sudo "$@"
+    else
+        "$@"
+    fi
+}
+# General functions & variables
+########################################################################################################## 
 # Part 0 Opening settings
 
 # Functions Part 0 set workdir
@@ -86,45 +94,6 @@ sign_repo() {
 
 
 
-# Main script
-echo""
-
-# Script opening:
-print_orange "Add your updated application .deb installers to the software auto-update cycle with your local repository. Make sure to add at least 1 .deb application package to your prefered location."
-
-echo""
-
-# Prompt user for directory path to local repository
-while true; do
-    print_dirpath_blue "Enter directory path:"
-
-    if [[ -z "$user_input" ]]; then
-        echo "The Path to your repository cannot be empty. Please provide a directory path."
-    else
-        if is_valid_directory; then
-            print_green "Valid directory found: '$user_input'."
-            break  # Exit the loop as valid directory input is provided
-        else
-            print_red "Directory '$user_input' does not exist or is not a directory."
-            user_input=""  # Clear user_input to prompt again
-#            print_dirpath_blue "Enter directory path:"  # Prompt again
-        fi
-    fi
-done
-
-print_blue "We will now change to your repository and do the work from there."
-echo ""
-print_blue "Press Enter to continue..."
-read
-
-# Change directory to the specified path
-cd "$dir_path" || { echo "Failed to change directory to $dir_path"; exit 1; }
-
-print_green "Your local repository under construction @$(pwd)"
-
-echo ""
-
-echo ""
 
 
 ## Part 1 create default apt repository content
@@ -192,6 +161,114 @@ extract_control() {
         echo "$Package $Version $Architecture $Maintainer $Installed_Size" >> "$override_file"
     fi
 }
+## Part 2: Define attributes and generate Release file
+
+# Function to compute checksums and sizes
+compute_checksums() {
+    local file=$1
+    md5sum=$(md5sum "$file" | awk '{print $1}')
+    sha1sum=$(sha1sum "$file" | awk '{print $1}')
+    sha256sum=$(sha256sum "$file" | awk '{print $1}')
+    size=$(stat -c%s "$file")
+    
+    md5sums+=" $md5sum $size $file"$'\n'
+    sha1sums+=" $sha1sum $size $file"$'\n'
+    sha256sums+=" $sha256sum $size $file"$'\n'
+}
+
+# Define the default attributes
+declare -A attributes
+attributes=(
+    ["Origin"]=""
+    ["Label"]=""
+    ["Suite"]="stable"
+    ["Codename"]="focal"
+    ["Date"]="$(date -u +'%a, %d %b %Y %H:%M:%S %Z')"
+    ["Architectures"]="amd64"
+    ["Components"]="main"
+    ["Description"]=""
+)
+
+# Part 3: Add the repository, turn it on or off
+
+
+
+# Function to enable the repository
+activate_repo() {
+    if [[ "$existing_line" == "# $repo_line" ]]; then
+        # Enable repository by uncommenting the line if it exists
+        if run_with_sudo sed -i -E "s|^# ($search_repo_line)|\1|" /etc/apt/sources.list; then
+            print_green "Repository enabled."
+        else
+            print_red "Failed to enable repository."
+        fi
+    else
+        print_green "Repository will be available."
+    fi
+}
+
+# Function to disable the repository
+disable_repo() {
+    if [[ "$existing_line" == "$repo_line" ]]; then
+        # Disable repository by commenting the line if it exists
+        if run_with_sudo sed -i -E "s|^($search_repo_line)|# \1|" /etc/apt/sources.list; then
+            print_red "Repository disabled."
+        else
+            print_red "Failed to disable repository."
+        fi
+    else
+        print_red "Repository left disabled for now."
+    fi
+}
+
+# Function to sign the repository
+sign_repo() {
+    echo "Signing the repository..."
+    ./signed-repo-script.sh
+}
+
+
+
+# Main script
+echo""
+
+# Script opening:
+print_orange "Add your updated application .deb installers to the software auto-update cycle with your local repository. Make sure to add at least 1 .deb application package to your prefered location."
+
+echo""
+
+# Prompt user for directory path to local repository
+while true; do
+    print_dirpath_blue "Enter directory path:"
+
+    if [[ -z "$user_input" ]]; then
+        echo "The Path to your repository cannot be empty. Please provide a directory path."
+    else
+        if is_valid_directory; then
+            print_green "Valid directory found: '$user_input'."
+            break  # Exit the loop as valid directory input is provided
+        else
+            print_red "Directory '$user_input' does not exist or is not a directory."
+            user_input=""  # Clear user_input to prompt again
+#            print_dirpath_blue "Enter directory path:"  # Prompt again
+        fi
+    fi
+done
+
+print_blue "We will now change to your repository and do the work from there."
+echo ""
+print_blue "Press Enter to continue..."
+read
+
+# Change directory to the specified path
+cd "$dir_path" || { echo "Failed to change directory to $dir_path"; exit 1; }
+
+print_green "Your local repository under construction @$(pwd)"
+
+echo ""
+
+echo ""
+
 
 # Opening part 1: file creation
 print_orange "First let's create the default files using dpkg."
@@ -238,36 +315,6 @@ done
 echo "Override file '$override_file' created successfully."
 
 echo ""
-
-
-
-## Part 2: Define attributes and generate Release file
-
-# Function to compute checksums and sizes
-compute_checksums() {
-    local file=$1
-    md5sum=$(md5sum "$file" | awk '{print $1}')
-    sha1sum=$(sha1sum "$file" | awk '{print $1}')
-    sha256sum=$(sha256sum "$file" | awk '{print $1}')
-    size=$(stat -c%s "$file")
-    
-    md5sums+=" $md5sum $size $file"$'\n'
-    sha1sums+=" $sha1sum $size $file"$'\n'
-    sha256sums+=" $sha256sum $size $file"$'\n'
-}
-
-# Define the default attributes
-declare -A attributes
-attributes=(
-    ["Origin"]=""
-    ["Label"]=""
-    ["Suite"]="stable"
-    ["Codename"]="focal"
-    ["Date"]="$(date -u +'%a, %d %b %Y %H:%M:%S %Z')"
-    ["Architectures"]="amd64"
-    ["Components"]="main"
-    ["Description"]=""
-)
 
 # Check if Release file exists and read existing values
 if [[ -f "Release" ]]; then
@@ -353,46 +400,7 @@ print_green "$(<./Release)"
 
 echo""
 
-
-## Part 3: Add the repository, turn it on or off
-
-
-
-# Function to enable the repository
-activate_repo() {
-    if [[ "$existing_line" == "# $repo_line" ]]; then
-        # Enable repository by uncommenting the line if it exists
-        if run_with_sudo sed -i -E "s|^# ($search_repo_line)|\1|" /etc/apt/sources.list; then
-            print_green "Repository enabled."
-        else
-            print_red "Failed to enable repository."
-        fi
-    else
-        print_green "Repository will be available."
-    fi
-}
-
-# Function to disable the repository
-disable_repo() {
-    if [[ "$existing_line" == "$repo_line" ]]; then
-        # Disable repository by commenting the line if it exists
-        if run_with_sudo sed -i -E "s|^($search_repo_line)|# \1|" /etc/apt/sources.list; then
-            print_red "Repository disabled."
-        else
-            print_red "Failed to disable repository."
-        fi
-    else
-        print_red "Repository left disabled for now."
-    fi
-}
-
-# Function to sign the repository
-sign_repo() {
-    echo "Signing the repository..."
-    ./signed-repo-script.sh
-}
-
-# main script
+# confirmation source list
 print_blue "Local Repository in sources.list"
 
 echo""
