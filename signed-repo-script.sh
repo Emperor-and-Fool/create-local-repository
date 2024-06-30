@@ -1,7 +1,8 @@
 #!/bin/bash
 
 
-# General functions
+# General functions & global variables
+current_directory=$(pwd)
 
 # Terminal output user info logic
 
@@ -53,91 +54,131 @@ run_with_sudo() {
 
 # Function to update sources.list
 update_sources_list() {
+    
     print_orange "Updating /etc/apt/sources.list file"
-    # Check if the file exists; if not, create it
-    run_with_sudo
-    if [ ! -f /etc/apt/sources.list ]; then
-        run_with_sudo /etc/apt/sources.list
-        print_orange "Created new sources.list"
-    fi
-    print_blue "Updating sources.list with signed-by directive..."
-    print_green "[signed-by=\"$current_directory/${kerray[0]}.gpg\"] \"$current_directory\"" | tee -a /etc/apt/sources.list >/dev/null
-    print_green "Repository signed and added to update sources. You can now 'sudo apt update' to find you have a local signed repository"
-}
-
-clean_local_source(){
-    print_orange "Time to add your local repository as a Source for apt to find"
-    # Define the search pattern
-    search_pattern="\./$"
-#    search_pattern="^deb \[[^]]*\] file:/.* \./"
-    print_blue "Search for lines with this pattern inside:" 
-    echo $search_pattern
-    
-    # Search for the line in sources.list that matches the pattern
-#    existing_line=$(grep -E "$search_pattern" /etc/apt/sources.list)
-#    print_green "$existing_line"
-    
-    while true; do
-        # Search for the line in sources.list that matches the pattern
-         grep_output=$(grep -E "$search_pattern" /etc/apt/sources.list)
-
-#            echo $grep_output
-            
-            
-#            existing_line="$grep_output"
-#            echo "$existing_line"
-            
-            
-#           escaped_line=$(printf '%s\n' "$existing_line" | sed -e 's/[]\/$*. -e ^[]/\\&/g')
-#           escaped_line=$(printf '%s\n' "$existing_line" | sed 's/[]\/$*. -]/\\&/g')
-            # print_green "$existing_line"
-            
-            # echo $grep_output
-            # Process each line individually
-            while IFS= read -r existing_line; do
-                # print_green "$existing_line"
-                # Prompt user for removal confirmation
-                read -p "Do you want to remove this line? (y/n): " response
-                echo "$user_response"
-                if [[ "$response" =~ ^[Yy]$ ]]; then
-                    # Create escaped line
-                    escaped_line=$(printf '%s\n' "$existing_line" | sed 's/[][\/$*. -]/\\&/g')
-                    echo "$escaped_line"
-                    # Remove the line from sources.list
-                    # run_with_sudo sed -i "\%$escaped_line%d" /etc/apt/sources.list
-                    
-                    echo "Line removed."
-                    user_response=""
-                    # Reset existing_line variable
-#                   existing_line=
-            else
-                echo "Line not removed."
-                break  # Exit the loop if user does not want to remove the line
-            fi
-        done <<< "$(grep -E "$search_pattern" /etc/apt/sources.list)"
-        
-done
-
-    update_sources_list
-
-}
-
-# Function to add GPG key to apt-key store
-add_key_to_apt() {
-    local key_name="$1"
-    print_blue "Adding GPG key $key_id to apt-key store..."
-    run_with_sudo apt-key add "${kerray[0]}.gpg"
-    print_green "GPG key added to apt-key store."
-    
-    # Goto add repository to sources.list
     echo ""
-    clean_local_source
+    
+    print_orange "Updating sources.list with signed-by directive..."
+    print_green "deb [signed-by=${kerray[0]}.gpg] file:$current_directory/ ./"
+    echo "deb [signed-by=${kerray[0]}.gpg] file:$current_directory/ ./" | run_with_sudo tee -a /etc/apt/sources.list >/dev/null
+
+    # Confirm correct signing
+    print_blue "Are these the local repositories you inteded to keep?"
+    print_green "$(grep -E "\./$" /etc/apt/sources.list)"
+    echo ""
+    read -p $'\033[34m(y)es, (n)o \033[0m' sign_confirmed
+
+    case "$sign_confirmed" in
+        y|Y)
+            print_green "Confirmed."
+            echo ""
+            ;;
+        n|N)
+            print_blue "For local repository change directory"
+            clean_local_source
+            echo ""
+            exit 0
+            ;;
+        *)
+            print_red "Invalid choice. Try again..."
+            ;;
+    esac
+
+    print_green "Repository "$current_directory" signed and added to update sources. You can now 'sudo apt update' to find you have a local signed repository"
+    echo ""
+    
+    # Optional apt update
+    read -p $'\033[34mDo you want to apt update now? (Y)es! (n)o. \033[0m' update_confirmed
+    print_green $(grep -E "$search_pattern" /etc/apt/sources.list)
+
+    case "$update_confirmed" in
+        y|Y)
+            print_orange "...apt updating"
+            run_with_sudo apt update
+            exit
+            ;;
+        n|N)
+            print_green "Thanks for using my script. It was a great way to learn scripting!"
+            exit
+            ;;
+        *)
+            print_red "Invalid choice. Try again..."
+            ;;
+    esac
+    
+    
 }
+
+clean_local_source() {
+    local search_pattern="\./$"
+    local sources_list="/etc/apt/sources.list"
+    
+    echo ""
+    print_orange "Time to add your local repository as a Source for apt to find"
+    
+    # Grep debug option uncomment
+    # Grep output confirmalion, local repository list
+    # grep_output=$(grep -E "$search_pattern" /etc/apt/sources.list)
+    # print_green "$grep_output"
+    # echo ""
+    
+    # Counter for intended local repositories
+    counter=0
+    
+    # Loop to clean and check previously created local repositories 
+    until ! rem_repo=$(grep -E "$search_pattern" /etc/apt/sources.list | tail -n +$counter | head -n 1) || [ -z "$rem_repo" ]; do
+        print_blue "Found matching line in sources.list:"
+        print_green "$rem_repo"
+        echo ""
+        echo ""
+        
+        # Until the cleaning list is empty
+        if [[ -n "$rem_repo" ]]; then
+
+            # Prompt user to remove or leave local repositories in place or skip the process
+            read -p $'\033[34mDo you want to remove this Repo? (y)es, (n)o, or (s)kip remaining repositories: \033[0m' response
+            if [[ "$response" =~ ^[Yy]$ ]]; then
+                escaped_line=$(printf '%s\n' "$rem_repo" | sed 's/[][\/$*. -]/\\&/g')
+                # to debug incorrect escaped_line uncomment below
+                # echo "$escaped_line"
+                run_with_sudo sed -i "\%$escaped_line%d" $sources_list
+                print_green "Line removed."
+            elif [[ "$response" =~ ^[Nn]$ ]]; then
+                print_green "Line not removed."
+                ((counter++))  # Increment counter for next iteration
+                print_orange "Working on line $counter"
+            elif [[ "$response" =~ ^[Ss]$ ]]; then
+                echo ""
+                print_orange "Skipping remaining lines."
+                break
+            else
+                print_red "Invalid response. Please enter y, n, or s (skip)."
+            fi
+        fi
+    done
+
+    print_green "Finished checking for matching lines."
+    update_sources_list
+}
+
 
 
 # Step 4 update the source list 
 ############################################################################################
 # Step 3 verify and sign
+
+
+# Function to add GPG key to apt-key store
+add_key_to_apt() {
+    local key_name="$1"
+    print_orange "Adding GPG key $key_id to apt-key store..."
+    run_with_sudo apt-key add "${kerray[0]}.gpg"
+    print_green "GPG key added to apt-key store."
+    echo ""
+
+    # Goto add repository to sources.list
+    clean_local_source
+}
 
 # Function to create Release files
 sign_release() {
@@ -159,6 +200,7 @@ sign_release() {
     # Create InRelease signed with the specified key-id
     gpg --default-key "$key_id" --output InRelease --clearsign Release
 
+    echo ""
     print_green "Release files created successfully. Adding public key to apt key store."
     echo""
     
@@ -183,7 +225,7 @@ print_dirpath_blue() {
 
 is_valid_directory() {
     local path="$user_input"
-    print_green "Checking directory: "$path" "
+    print_orange "Checking directory: "$path" "
     if [[ -d "$path" ]]; then
   #      print_green "Directory "$path"' exists."
         return 0  # Path is a directory
@@ -208,7 +250,7 @@ go_to_repo() {
                 print_red "Directory '$user_input' does not exist or is not a directory."
                 user_input=""  # Clear user_input to prompt again
                 # Uncomment the next line if you want to prompt again here
-                # print_dirpath_blue "Enter directory path:"  # Prompt again
+                print_dirpath_blue "Enter directory path:"  # Prompt again
             fi
         fi
         
@@ -219,7 +261,10 @@ go_to_repo() {
 
 # Function to confirm current directory
 confirm_current_directory() {
-    local current_directory=$(pwd)
+
+    print_orange "Now let's see if we are in the right directory"
+    echo ""
+
     read -p $'\033[34mIs this the directory where your repository should be signed? (y/n): '"$current_directory"$'\033[0m)' confirm_dir
 
     case "$confirm_dir" in
@@ -228,14 +273,14 @@ confirm_current_directory() {
             echo ""
             ;;
         n|N)
-            echo "Directory not confirmed"
+            print_blue "For local repository change directory"
             go_to_repo
             echo ""
             exit 0
             ;;
         *)
-            echo "Invalid choice. Exiting..."
-            exit 1
+            print_red "Invalid choice. Try again..."
+            confirm_current_directory
             ;;
     esac
     
@@ -280,13 +325,13 @@ handle_gpg_success() {
     done
     
     
-    if [[ "$gpg_success" == "n" && attempts < 2 ]]; then
+    if [[ "$gpg_success" == "y" && attempts -lt 2 ]]; then
         create_public_key
-    elif [[ "$gpg_success" == "n" && attempts -eq 2 ]]; then
+    elif [[ "$gpg_success" == "y" && attempts -eq 2 ]]; then
         print_red "You gpg failed. Check if it  is installed and functioning. This is outside the scope of this script!"
         exit
     
-    elif [[ "$gpg_success" == "y" && attempts -lt 2 ]]; then
+    elif [[ "$gpg_success" == "n" && attempts -lt 2 ]]; then
         # Confirm current directory
         confirm_current_directory
         echo ""  # Optional newline for readability or spacing
@@ -379,9 +424,6 @@ confirm_public_key() {
 
              if [[ -n "$key_id" ]]; then
                 print_green "Key ID found: $key_id"
-                echo ""
-                print_orange "Now let's see if we are in the right directory"
-                echo ""
                 # Proceed to confirm_current_directory
                 confirm_current_directory
 
@@ -395,8 +437,8 @@ confirm_public_key() {
             confirm_public_key  # Restart the process
         fi
     else
-        print_red "Invalid input. Please enter a valid key name."
-        confirm_public_key  # Restart the process
+        print_red "Invalid input. Create a new one or start again (Ctrl + c)"
+        create_key_name  # Restart the process
     fi
 }
 
