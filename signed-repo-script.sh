@@ -55,16 +55,23 @@ run_with_sudo() {
 # Function to update sources.list
 update_sources_list() {
     
-    print_orange "Updating /etc/apt/sources.list file"
+    print_orange "Updating /etc/apt/sources.list.d/local.list file"
     echo ""
     
+    if [ ! -f /etc/apt/sources.list.d/local.list ]; then
+        run_with_sudo touch /etc/apt/sources.list.d/local.list
+        print_green "/etc/apt/sources.list.d/local.list created."
+    else
+        print_green "/etc/apt/sources.list.d/local.list already exists."
+    fi
+    
     print_orange "Updating sources.list with signed-by directive..."
-    print_green "deb [signed-by=${kerray[0]}.gpg] file:$current_directory/ ./"
-    echo "deb [signed-by=${kerray[0]}.gpg] file:$current_directory/ ./" | run_with_sudo tee -a /etc/apt/sources.list >/dev/null
+    print_green "deb [Signed-By=${kerray[0]}.gpg] file:$current_directory/ ./"
+    echo "deb [Signed-By=${kerray[0]}.gpg] file:$current_directory/ ./" | run_with_sudo tee -a /etc/apt/sources.list.d/local.list >/dev/null
 
     # Confirm correct signing
     print_blue "Are these the local repositories you inteded to keep?"
-    print_green "$(grep -E "\./$" /etc/apt/sources.list)"
+    print_green "$(grep -E "\./$" /etc/apt/sources.list.d/local.list)"
     echo ""
     read -p $'\033[34m(y)es, (n)o \033[0m' sign_confirmed
 
@@ -89,7 +96,7 @@ update_sources_list() {
     
     # Optional apt update
     read -p $'\033[34mDo you want to apt update now? (Y)es! (n)o. \033[0m' update_confirmed
-    print_green $(grep -E "$search_pattern" /etc/apt/sources.list)
+    print_green $(grep -E "$search_pattern" /etc/apt/sources.list.d/local.list)
 
     case "$update_confirmed" in
         y|Y)
@@ -111,22 +118,16 @@ update_sources_list() {
 
 clean_local_source() {
     local search_pattern="\./$"
-    local sources_list="/etc/apt/sources.list"
+    local sources_list="/etc/apt/sources.list.d/local.list"
     
     echo ""
     print_orange "Time to add your local repository as a Source for apt to find"
-    
-    # Grep debug option uncomment
-    # Grep output confirmalion, local repository list
-    # grep_output=$(grep -E "$search_pattern" /etc/apt/sources.list)
-    # print_green "$grep_output"
-    # echo ""
     
     # Counter for intended local repositories
     counter=0
     
     # Loop to clean and check previously created local repositories 
-    until ! rem_repo=$(grep -E "$search_pattern" /etc/apt/sources.list | tail -n +$counter | head -n 1) || [ -z "$rem_repo" ]; do
+    until ! rem_repo=$(grep -E "$search_pattern" /etc/apt/sources.list.d/local.list | tail -n +$counter | head -n 1) || [ -z "$rem_repo" ]; do
         print_blue "Found matching line in sources.list:"
         print_green "$rem_repo"
         echo ""
@@ -185,23 +186,23 @@ sign_release() {
 
     # Check for the existance of the Release file
     if [ -f "Release" ]; then
-            print_green "Release file exists in the current directory."
+            print_green "Release file exists in the current directory. "
         else
-            print_red "Release file does not exist. Please run the create-local-repo script first."
-            exit 1
+            print_red "Release file does not exist. Please run the create-local-repo script first. "
+            # exit 1
         fi
 
     print_orange "Signing Release by creating Release.gpg and InRelease file using key:"; print_green "$key_id"
     echo ""
     
     # Create Release.gpg signed with the specified key-id
-    gpg --default-key "$key_id" --output Release.gpg --detach-sign Release
+    gpg --default-key "$key_id" -o Release.gpg --detach-sign Release
 
     # Create InRelease signed with the specified key-id
-    gpg --default-key "$key_id" --output InRelease --clearsign Release
+    gpg --default-key "$key_id" -o InRelease --clearsign Release
 
     echo ""
-    print_green "Release files created successfully. Adding public key to apt key store."
+    print_green "Release signatures created successfully. Adding public key to apt key store."
     echo""
     
     # Go to apt-key Adding
@@ -244,7 +245,7 @@ go_to_repo() {
             echo "The path to your repository cannot be empty. Please provide a directory path."
         else
             if is_valid_directory; then
-                print_green "Valid directory found: '$user_input'."
+                print_green "Valid directory found: '$user_input' "
                 break  # Exit the loop as valid directory input is provided
             else
                 print_red "Directory '$user_input' does not exist or is not a directory."
@@ -325,13 +326,13 @@ handle_gpg_success() {
     done
     
     
-    if [[ "$gpg_success" == "y" && attempts -lt 2 ]]; then
+    if [[ "$gpg_success" == "n" && attempts -lt 2 ]]; then
         create_public_key
-    elif [[ "$gpg_success" == "y" && attempts -eq 2 ]]; then
+    elif [[ "$gpg_success" == "n" && attempts -eq 2 ]]; then
         print_red "You gpg failed. Check if it  is installed and functioning. This is outside the scope of this script!"
         exit
     
-    elif [[ "$gpg_success" == "n" && attempts -lt 2 ]]; then
+    elif [[ "$gpg_success" == "y" && attempts -lt 2 ]]; then
         # Confirm current directory
         confirm_current_directory
         echo ""  # Optional newline for readability or spacing
@@ -350,19 +351,19 @@ create_public_key() {
     
     # Export the key
     if [ -n "$key_id" ]; then
-        gpg --export --armor "$key_id" > "$key_name.key"
-        print_green "Public key exported as $key_name.key"
+        gpg --export --armor "$key_id" > "$key_name.gpg"
+        print_green "Public key exported as $key_name.gpg"
     else
         print_red "Invalid key name. Export aborted."
         exit 1
     fi
 
     # Convert to .gpg key
-    gpg --output "$key_name.gpg" --dearmor "$key_name.key"
-    print_green "Public key converted to $key_name.gpg"
+    # gpg --output "$key_name.gpg" --armor "$key_name.key"
+    # print_green "Public key converted to $key_name.gpg"
 
     # Remove .key file
-    rm -f "$key_name.key"
+    # rm -f "$key_name.key"
     
     # Confirm success
     print_green "Exported key $key_name.key removed."
@@ -395,6 +396,9 @@ confirm_public_key() {
     local key_name
     local key_id
     local kerray=()
+    
+    # Change directory to the specified path
+    cd "$dir_path" || { echo "Failed to change directory to $dir_path"; exit 1; }
 
     read -p $'\033[34mEnter the name of your public key (without the .gpg extension): \033[0m' key_name
     
@@ -496,6 +500,7 @@ read_with_timeout() {
             echo "Thanks for using my script."
             ;;
     esac
+    
 }
 
 
