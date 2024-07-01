@@ -1,10 +1,39 @@
  #!/bin/bash
 
- 
 
-# General functions
+#######################################################################################################
+## Global functions, variables & arrays
 
-# Terminal output user info logic
+# Variables
+
+# Location of scripts
+dir_scripts=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+# Mandatory Repository File
+override_file="override"
+
+# Define a list of valid attributes
+# valid_attributes=("Origin" "Label" "Suite" "Codename" "Date" "Architectures" "Components" "Description")
+
+
+# Arrays
+
+# Declare global associative array 'attributes'
+declare -gA attributes=(
+    ["Origin"]=""
+    ["Label"]=""
+    ["Suite"]="stable"
+    ["Codename"]="focal"
+    ["Date"]="$(date -u +'%a, %d %b %Y %H:%M:%S %Z')"
+    ["Architectures"]="amd64"
+    ["Components"]="main"
+    ["Description"]=""
+)
+
+# Declare global indexed array 'part1_output'
+declare -g part1_output
+
+## Terminal color output user info logic
 
 # Function to center text output
 center_text() {
@@ -40,12 +69,20 @@ print_blue() {
 }
 
 # Function to prompt in blue and return user input in green
+print_workdir_blue() {
+    local prompt="$1"
+    echo -e "\e[34m$prompt\e[0m"  # Print the prompt in blue
+    read dir_path            # Read the user input
+    echo -e "\e[32m$dir_path\e[0m"  # Return the user input in green
+}
+
+# Function to prompt in blue and return user input in green
 print_dirpath_blue() {
     local prompt=$1
     echo -e "\e[34m$prompt\e[0m"  # Print the prompt in blue
-    read user_input         # Read the user input and assign it to the reference variable
- #   echo "$user_input"         # Echo the user input to capture it later
-    echo -e "\e[33m$user_input\e[0m"  # Print the user input in yellow
+    read dir_path         # Read the user input and assign it to the reference variable
+ #   echo "$dir_path"         # Echo the user input to capture it later
+    echo -e "\e[33m$dir_path\e[0m"  # Print the user input in yellow
 }
 
 # Function to prompt for sudo if needed
@@ -56,22 +93,15 @@ run_with_sudo() {
         "$@"
     fi
 }
-# General functions & variables
+## General functions & variables
 ########################################################################################################## 
-# Part 0 Opening settings
+## Part 1 Functions for steps in the main script
 
-# Functions Part 0 set workdir
-is_valid_directory() {
-    local path="user_input"
-    if [[ -d "$path" ]]; then
-        return 0  # Indicates success (path is a directory)
-    else
-        return 1  # Indicates failure (path is not a directory)
-    fi
-}
+# Functions Part 1 set workdir
 
+# Validate repository directory 
 is_valid_directory() {
-    local path="$user_input"
+    local path="$dir_path"
     print_green "Checking directory: "$path" "
     if [[ -d "$path" ]]; then
   #      print_green "Directory "$path"' exists."
@@ -82,39 +112,121 @@ is_valid_directory() {
     fi
 }
 
-# Function to sign the repository
-sign_repo() {
-    echo "Signing the repository..."
-    # Add your signing logic here
-    # For example:
-    ./signed-repo-script.sh
-    exit
+
+## Functions Part 1 repository directory
+########################################################################################################
+## Part 2 Define attributes and generate Release file
+
+# Function to compute checksums and append to 'Release' file
+compute_checksums_and_append() {
+    # Write content to a temporary file
+    local final_tmp_file=$(mktemp)
+    printf "%s\n" "${part1_output[@]}" > "$final_tmp_file"
+    
+    # Create/empty the 'Release' file
+    local output_file="Release"
+    : > "$output_file"
+    
+    # List of files to process
+    local files=("Release" "Packages" "Packages.gz")
+    
+    # Initialize checksum variables
+    local md5sums=""
+    local sha1sums=""
+    local sha256sums=""
+    local sha512sums=""
+    
+    # Compute checksums for each file and append to 'Release' file
+    for file in "${files[@]}"; do
+        local md5sum=$(md5sum "$file" | awk '{print $1}')
+        local sha1sum=$(sha1sum "$file" | awk '{print $1}')
+        local sha256sum=$(sha256sum "$file" | awk '{print $1}')
+        local sha512sum=$(sha512sum "$file" | awk '{print $1}')
+        local size=$(stat -c%s "$file")
+        
+        md5sums+=" $md5sum $size $file"$'\n'
+        sha1sums+=" $sha1sum $size $file"$'\n'
+        sha256sums+=" $sha256sum $size $file"$'\n'
+        sha512sums+=" $sha512sum $size $file"$'\n'
+    done
+    
+     # Append checksums to part1_tmp_file
+    {
+        printf "MD5Sum:\n%s" "$md5sums"
+        printf "SHA1:\n%s" "$sha1sums"
+        printf "SHA256:\n%s" "$sha256sums"
+        printf "SHA512:\n%s" "$sha512sums"
+    } >> "$final_tmp_file"
+    
+    # Concatenate parts into the final 'Release' file
+    cat $final_tmp_file > "$output_file"
+    echo ""
+    echo ""
+
+    print_green "Release Data & checksums succesfully created "
+    # Print the generated 'Release' file
+    cat "$output_file" /dev/null
 }
 
+# Function to process attributes
+process_repository_attributes() {
+    # cat ./Release
+        local release_file="Release"
 
-
-
-
-
-## Part 1 create default apt repository content
-
-# Function to prompt in blue and return user input in green
-print_workdir_blue() {
-    local prompt="$1"
-    echo -e "\e[34m$prompt\e[0m"  # Print the prompt in blue
-    read user_input            # Read the user input
-    echo -e "\e[32m$user_input\e[0m"  # Return the user input in green
-}
-
-# Function to check for .deb files in the current directory
-check_for_deb_files() {
-    if ls *.deb 1> /dev/null 2>&1; then
-        print_green "Found.deb files to process."
-        return 0
-    else
-        print_red "No .deb files found in the current directory."
-        return 1
+    # Loop through keys in attributes array
+    for key in "${!attributes[@]}"; do
+    # Skip dynamically generated fields like Date
+    if [[ "$key" == "Date" ]]; then
+        continue
     fi
+    
+    # Check if attribute value is empty
+    if [[ -z "${attributes[$key]}" ]]; then
+        # Attempt to read value from Release file
+        if [[ -f "$release_file" ]]; then
+            while IFS=": " read -r file_key file_value; do
+                file_key=$(echo "$file_key" | tr -d '\r')
+                # Compare with attributes keys and update if match found
+                if [[ "$key" == "$file_key" ]]; then
+                    attributes["$key"]=$file_value
+                    break
+                fi
+            done < "$release_file"
+        fi
+    fi
+done
+
+    # Display all attributes
+    echo "Attributes after reading from Release file: "
+    for key in "${!attributes[@]}"; do
+        echo "$key: ${attributes[$key]}"
+    done
+    
+    # Prompt for missing attribute values
+    for key in "${!attributes[@]}"; do
+        if [[ -z "${attributes[$key]}" ]]; then
+            read -p "Enter value for $key: " value
+            attributes[$key]=$value
+        fi
+    done
+
+    # Define the order of attributes
+    local ordered_keys=(
+        "Origin"
+        "Label"
+        "Suite"
+        "Codename"
+        "Date"
+        "Architectures"
+        "Components"
+        "Description"
+    )
+
+    # Store ordered output in global part1_output array
+    part1_output=()
+    for key in "${ordered_keys[@]}"; do
+        part1_output+=("$key: ${attributes[$key]}")
+    done
 }
 
 # Function to check package creation
@@ -122,15 +234,17 @@ check_package_creation() {
     local error_flag=false
 
     # Create Packages file
-    dpkg-scanpackages . /dev/null > Packages 2> errordpkg.log
-    if [[ -s error.log ]]; then
-    print_red "Errors detected processing the application packages. They may not comply with the current standards."
+    errordpkg_log=$(mktemp) && dpkg-scanpackages . /dev/null > Packages 2> "$errordpkg_log"
+    if [[ -s $errordpkg_log ]]; then
+    print_red "Errors detected processing the application packages. They may not comply with the current standards.\n"
+    more "$errordpkg_log"
     fi
 
      # Compress Packages file into Packages.gz
-    gzip -c Packages > Packages.gz 2> ziperror.log
-    if [[ -s error.log ]]; then
+    ziperror_log=$(mktemp) && gzip -c Packages > Packages.gz 2> "$ziperror_log"
+    if [[ -s "$ziperror_log" ]]; then
     print_red "Errors detected creating a Packages.gz file. We need proper application packages to create your local Repository"
+    cat "$ziperror_log"
         error_flag=true
     fi
 
@@ -140,6 +254,10 @@ check_package_creation() {
     print_orange "Check your application packages. Make sure they comply with the standards. Remove all other files and try again."
         exit 1
     fi
+    # Clean up temporary error log
+    rm "$errordpkg_log"
+    # Clean up temporary error log
+    rm "$ziperror_log"
 }
 
 # Function to extract control information and append to override file
@@ -156,48 +274,51 @@ extract_control() {
         Architecture=$(echo "$control_data" | grep -Po '(?<=Architecture: ).*')
         Maintainer=$(echo "$control_data" | grep -Po '(?<=Maintainer: ).*')
         Installed_Size=$(echo "$control_data" | grep -Po '(?<=Installed-Size: ).*')
+        
+        #Control data to terminal
+        echo $Package
+        echo $Version
+        echo $Architecture
+        echo $Maintainer
+        echo $Installed_Size
 
         # Write to override file
         echo "$Package $Version $Architecture $Maintainer $Installed_Size" >> "$override_file"
+        
     fi
 }
-## Part 2: Define attributes and generate Release file
 
-# Function to compute checksums and sizes
-compute_checksums() {
-    local file=$1
-    md5sum=$(md5sum "$file" | awk '{print $1}')
-    sha1sum=$(sha1sum "$file" | awk '{print $1}')
-    sha256sum=$(sha256sum "$file" | awk '{print $1}')
-    size=$(stat -c%s "$file")
-    
-    md5sums+=" $md5sum $size $file"$'\n'
-    sha1sums+=" $sha1sum $size $file"$'\n'
-    sha256sums+=" $sha256sum $size $file"$'\n'
+# Function to check for .deb files in the current directory
+check_for_deb_files() {
+    if ls *.deb 1> /dev/null 2>&1; then
+        print_green "Found.deb files to process."
+        return 0
+    else
+        print_red "No .deb files found in the current directory."
+        return 1
+    fi
 }
 
-# Define the default attributes
-declare -A attributes
-attributes=(
-    ["Origin"]=""
-    ["Label"]=""
-    ["Suite"]="stable"
-    ["Codename"]="focal"
-    ["Date"]="$(date -u +'%a, %d %b %Y %H:%M:%S %Z')"
-    ["Architectures"]="amd64"
-    ["Components"]="main"
-    ["Description"]=""
-)
 
-# Part 3: Add the repository, turn it on or off
+## Part 2 Functions to generate files and data
+########################################################################################################
+## Part 3 Functions to add the repository to sources, turn it on or off
 
-
+# Open script to sign the repository
+sign_repo() {
+    echo "Change to signed repository..."
+    # Add your signing logic here
+    
+    echo $dir_scripts
+    "$dir_scripts/signed-repo-script.sh"
+    exit
+}
 
 # Function to enable the repository
 activate_repo() {
     if [[ "$existing_line" == "# $repo_line" ]]; then
         # Enable repository by uncommenting the line if it exists
-        if run_with_sudo sed -i -E "s|^# ($search_repo_line)|\1|" /etc/apt/sources.list; then
+        if run_with_sudo sed -i -E "s|^# ($search_repo_line)|\1|" /etc/apt/sources.list.d/local.list; then
             print_green "Repository enabled."
         else
             print_red "Failed to enable repository."
@@ -211,7 +332,7 @@ activate_repo() {
 disable_repo() {
     if [[ "$existing_line" == "$repo_line" ]]; then
         # Disable repository by commenting the line if it exists
-        if run_with_sudo sed -i -E "s|^($search_repo_line)|# \1|" /etc/apt/sources.list; then
+        if run_with_sudo sed -i -E "s|^($search_repo_line)|# \1|" /etc/apt/sources.list.d/local.list; then
             print_red "Repository disabled."
         else
             print_red "Failed to disable repository."
@@ -219,18 +340,17 @@ disable_repo() {
     else
         print_red "Repository left disabled for now."
     fi
-}
-
-# Function to sign the repository
-sign_repo() {
-    echo "Signing the repository..."
-    ./signed-repo-script.sh
+    sign_repo "Let's Go!"
+    exit
 }
 
 
+## Part 3 Functions for steps in the main script
+########################################################################################################## 
+## Main script
+ 
 
-# Main script
-echo""
+# Part 1: Repository directory verification
 
 # Script opening:
 print_orange "Add your updated application .deb installers to the software auto-update cycle with your local repository. Make sure to add at least 1 .deb application package to your prefered location."
@@ -241,15 +361,15 @@ echo""
 while true; do
     print_dirpath_blue "Enter directory path:"
 
-    if [[ -z "$user_input" ]]; then
+    if [[ -z "$dir_path" ]]; then
         echo "The Path to your repository cannot be empty. Please provide a directory path."
     else
         if is_valid_directory; then
-            print_green "Valid directory found: '$user_input'."
+            print_green "Valid directory found: '$dir_path'."
             break  # Exit the loop as valid directory input is provided
         else
-            print_red "Directory '$user_input' does not exist or is not a directory."
-            user_input=""  # Clear user_input to prompt again
+            print_red "Directory '$dir_path' does not exist or is not a directory."
+            dir_path=""  # Clear dir_path to prompt again
 #            print_dirpath_blue "Enter directory path:"  # Prompt again
         fi
     fi
@@ -257,153 +377,113 @@ done
 
 print_blue "We will now change to your repository and do the work from there."
 echo ""
-print_blue "Press Enter to continue..."
-read
+
+script_dir=$(dirname "${BASH_SOURCE[0]}")
+echo $script_dir
 
 # Change directory to the specified path
 cd "$dir_path" || { echo "Failed to change directory to $dir_path"; exit 1; }
 
 print_green "Your local repository under construction @$(pwd)"
-
-echo ""
-
 echo ""
 
 
-# Opening part 1: file creation
-print_orange "First let's create the default files using dpkg."
+## Part 2.1 Repository file creation
 
+print_orange "First let's create the default repository files using dpkg."
+echo ""
+
+print_red "Press Enter to continue..."
+read
 echo ""
 
 # Initial check for .deb files
 if ! check_for_deb_files; then
-    print_read_blue "Would you like to add a *.deb file now? (y/n): "
+    read "Would you like to add a *.deb file now? (y/n): " user_input
     if [[ "$user_input" =~ ^[Yy]$ ]]; then
         # Add your logic here for handling the addition of *.deb files
         echo "Please add *.deb file(s) now and press enter to continue."
         read
 
-        # Check again after user presses enter
+        # Check again if no deb files are available
         if ! check_for_deb_files; then
-            print_orange "No .deb files found.
-We need at least one .deb file to process and generate the default repository files. 
-Exiting the script until you know what you realy want."
-            exit 1
+            print_red "No .deb files found. /n"
+            print_blue "We need at least one .deb file to process and generate the default repository files. "
+            check_for_deb_files
         fi
     else
-        echo "Exiting the script."
+        print_red "Exiting the script. Prepare yourself."
         exit 1
     fi
 fi
-
-# Create Packages and Packages.gz files for apt repository
-check_package_creation
-
-echo ""
-
-override_file="override"
 
 # Remove existing override file if exists
 rm -f "$override_file"
 
 # Iterate over each .deb file in the current directory
 for deb_file in *.deb; do
-    echo "Processing $deb_file..."
+    print_orange "Processing $deb_file..."
     extract_control "$deb_file"
+    print_green "$deb_file"
+    echo ""
 done
 
-echo "Override file '$override_file' created successfully."
-
+print_green "Override file '$override_file' created successfully."
 echo ""
 
-# Check if Release file exists and read existing values
-if [[ -f "Release" ]]; then
-    while IFS=": " read -r key value; do
-        key=$(echo "$key" | tr -d '\r')  # Remove any carriage return characters
-        if [[ -v attributes["$key"] ]]; then
-            attributes["$key"]=$value
-        fi
-    done < "Release"
-fi
+# Create Packages and Packages.gz files for apt repository
+check_package_creation
+echo ""
 
-# Debugging: Print the attributes array to check the values
-for key in "${!attributes[@]}"; do
-    echo "Attribute key: '$key' has value: '${attributes[$key]}'"
-done
+print_orange "Files now in your repository: "
+files=$(find ./ -maxdepth 1 -type f ! -name "*.sh")
+while IFS= read -r file; do
+    print_green "$file"
+done <<< "$files"
 
-# Prompt for missing attribute values
-for key in "${!attributes[@]}"; do
-    if [[ -z "${attributes[$key]}" ]]; then
-        read -p "Enter value for $key: " value
-        attributes[$key]=$value
-    fi
-done
+print_blue "If you have a 'Packages', a 'Packages.gz', a 'Release' and an 'override' in your list.\n" 
+print_blue "we will now add mandatory content to the files.\n"
+print_red "Press Enter to continue...\n"
+read
+echo ""
 
-# Define the order of attributes
-ordered_keys=(
-    "Origin"
-    "Label"
-    "Suite"
-    "Codename"
-    "Date"
-    "Architectures"
-    "Components"
-    "Description"
-)
+## Part 2.2 Release file content & complience
 
-# Create an array in memory to hold Part 1 output
-declare -a part1_output
+process_repository_attributes
 
-# Store Part 1 output in the array
-for key in "${ordered_keys[@]}"; do
-    part1_output+=("$key: ${attributes[$key]}")
-done
+print_red "Press Enter to continue..."
+read
+echo ""
 
-# Write Part 1 output to a temporary file
-part1_tmp_file=$(mktemp)
-printf "%s\n" "${part1_output[@]}" > "$part1_tmp_file"
-
-# Step 2: Compute checksums and append to 'Release' file
-
-# List of files to process
-files=("Release" "Packages" "Packages.gz")
-
-# Create/empty the 'Release' file
-output_file="Release"
-: > $output_file
-
-# Initialize checksum variables
-md5sums=""
-sha1sums=""
-sha256sums=""
-
-# Compute checksums for each file
-for file in "${files[@]}"; do
-    compute_checksums $file
-done
-
-# Append step 2 output to the temporary file
-{
-    printf "MD5Sum:\n%s" "$md5sums"
-    printf "SHA1:\n%s" "$sha1sums"
-    printf "SHA256:\n%s" "$sha256sums"
-} >> "$part1_tmp_file"
-
-# Concatenate parts into the final 'Release' file
-cat "$part1_tmp_file" > "$output_file"
-
-# Print the generated 'Release' file
-cat $output_file
+compute_checksums_and_append
 
 # Debugging file generation
-print_green "$(<./Release)"
+# print_green "$(<./Release)"
+# echo""
 
-echo""
+print_blue "You can check the content for valid checksums and file-sizes. /n"
+print_blue "Remember these are needed to correctly sign your release file later. /n"
+print_red "Press Enter to continue... "
+read
+echo ""
+
+## Part 3 Add repository to sources, enable or sign
 
 # confirmation source list
-print_blue "Local Repository in sources.list"
+print_orange "Add your local .deb repository to /etc/apt/sources.list.d/local.list (No signatures) /n" 
+print_blue "If you have downloaded the script named 'create_signed-repo.sh', /n"
+print_blue "make sure it is inside the repository if you like official sgning after creation. You can do this as a separate step later./n"
 
-echo""
+print_red "Press Enter to continue..."
+read
+echo ""
+
+if [ ! -f /etc/apt/sources.list.d/local.list ]; then
+    run_with_sudo touch /etc/apt/sources.list.d/local.list
+    print_green "/etc/apt/sources.list.d/local.list created."
+else
+    print_green "/etc/apt/sources.list.d/local.list already exists."
+fi
 
 # Define the repository line to add
 repo_line="deb [allow-insecure=yes] file:$(pwd)/ ./"
@@ -414,18 +494,18 @@ search_repo_line=$(printf '%s\n' "$repo_line" | sed -e 's/[]\/$*.^[]/\\&/g')
 # Debugging: Display the escaped repo_line being searched
 print_orange "Searching for repo line: $repo_line"
 
-if [[ ! -r /etc/apt/sources.list ]]; then
-    print_red "Error: Cannot read /etc/apt/sources.list. Please check location and file permissions."
+if [[ ! -r /etc/apt/sources.list.d/local.list ]]; then
+    print_red "Error: Cannot read /etc/apt/sources.list.d/local.list. Please check location and file permissions."
     exit 1
 fi
 
 # Check if repository line already exists in sources.list (commented or uncommented)
-existing_line=$(grep -E "^(# )?$search_repo_line" /etc/apt/sources.list)
+existing_line=$(grep -E "^(# )?$search_repo_line" /etc/apt/sources.list.d/local.list)
 
 if [[ -z "$existing_line" ]]; then
     # Repository line does not exist, add it
     print_orange "Adding repository line to sources.list..."
-    echo "$repo_line" | run_with_sudo tee -a /etc/apt/sources.list > /dev/null
+    echo "$repo_line" | run_with_sudo tee -a /etc/apt/sources.list.d/local.list > /dev/null
     print_orange "Repository line added:"
     print_green "$repo_line"
 else
@@ -449,7 +529,7 @@ case "$enable_repo" in
         disable_repo
         ;;
     s)
-        sign_repo "Let's Go!"
+        disable_repo
         ;;
     *)
         print_orange "Invalid input. No changes made."
