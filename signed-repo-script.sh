@@ -1,8 +1,7 @@
 #!/bin/bash
 
-
 # General functions & global variables
-current_directory=$(pwd)
+current_directory=$(pwd)  # <----not very functional
 
 # Terminal output user info logic
 
@@ -39,6 +38,15 @@ print_blue() {
     center_text "$(echo -e "\e[34m$message\e[0m")"
 }
 
+# Function to prompt in blue and return user input in green
+print_dirpath_blue() {
+    local prompt=$1
+    echo -e "\e[34m$prompt\e[0m"  # Print the prompt in blue
+    read dir_path         # Read the user input and assign it to the reference variable
+ #   echo "$user_input"         # Echo the user input to capture it later
+    echo -e "\e[35m$dir_path\e[0m"  # Print the user input in yellow
+}
+
 # Function to prompt for sudo if needed
 run_with_sudo() {
     if [ "$EUID" -ne 0 ]; then
@@ -48,9 +56,11 @@ run_with_sudo() {
     fi
 }
 
+
+
 # General script functions
 ##########################################################################################
-# Part 4 create local signed source
+# Step 4 update the source list
 
 # Function to update sources.list
 update_sources_list() {
@@ -65,9 +75,12 @@ update_sources_list() {
         print_green "/etc/apt/sources.list.d/local.list already exists."
     fi
     
+    cd $dir_path
+    echo $(pwd)
+    
     print_orange "Updating sources.list with signed-by directive..."
-    print_green "deb [Signed-By=${kerray[0]}.gpg] file:$current_directory/ ./"
-    echo "deb [Signed-By=${kerray[0]}.gpg] file:$current_directory/ ./" | run_with_sudo tee -a /etc/apt/sources.list.d/local.list >/dev/null
+    print_green "deb [Signed-By=$(pwd)/${kerray[0]}.key] file:$(pwd)/ ./"
+    echo "deb [Signed-By=$(pwd)/${kerray[0]}.key] file:$(pwd)/ ./" | run_with_sudo tee -a /etc/apt/sources.list.d/local.list >/dev/null
 
     # Confirm correct signing
     print_blue "Are these the local repositories you inteded to keep?"
@@ -82,6 +95,7 @@ update_sources_list() {
             ;;
         n|N)
             print_blue "For local repository change directory"
+            cd $dir_path
             clean_local_source
             echo ""
             exit 0
@@ -90,7 +104,7 @@ update_sources_list() {
             print_red "Invalid choice. Try again..."
             ;;
     esac
-
+    
     print_green "Repository "$current_directory" signed and added to update sources. You can now 'sudo apt update' to find you have a local signed repository"
     echo ""
     
@@ -160,26 +174,14 @@ clean_local_source() {
 
     print_green "Finished checking for matching lines."
     update_sources_list
+    return
 }
 
 
 
 # Step 4 update the source list 
 ############################################################################################
-# Step 3 verify and sign
-
-
-# Function to add GPG key to apt-key store
-add_key_to_apt() {
-    local key_name="$1"
-    print_orange "Adding GPG key $key_id to apt-key store..."
-    run_with_sudo apt-key add "${kerray[0]}.gpg"
-    print_green "GPG key added to apt-key store."
-    echo ""
-
-    # Goto add repository to sources.list
-    clean_local_source
-}
+# Step 3 Sign repository Release file
 
 # Function to create Release files
 sign_release() {
@@ -196,103 +198,37 @@ sign_release() {
     echo ""
     
     # Create Release.gpg signed with the specified key-id
-    gpg --default-key "$key_id" -o Release.gpg --detach-sign Release
+    gpg --default-key "$key_id" -b -a -o Release.gpg Release
 
     # Create InRelease signed with the specified key-id
-    gpg --default-key "$key_id" -o InRelease --clearsign Release
+    gpg --clearsign -u "$key_id" -o InRelease Release
 
     echo ""
     print_green "Release signatures created successfully. Adding public key to apt key store."
     echo""
     
-    # Go to apt-key Adding
-    add_key_to_apt
+    # Goto add repository to sources.list
+    clean_local_source
+    
 }
 
 
 
-# Step 3 verify and sign
+# Step 3 Sign repository Release file
 ###############################################################################################################
-# Step 2 Directory confirmation
+# Part 2 Confirm existing or Create, export and add gpg key-pair
 
-# Function to prompt in blue and return user input in green
-print_dirpath_blue() {
-    local prompt=$1
-    echo -e "\e[34m$prompt\e[0m"  # Print the prompt in blue
-    read user_input         # Read the user input and assign it to the reference variable
- #   echo "$user_input"         # Echo the user input to capture it later
-    echo -e "\e[33m$user_input\e[0m"  # Print the user input in yellow
-}
-
-is_valid_directory() {
-    local path="$user_input"
-    print_orange "Checking directory: "$path" "
-    if [[ -d "$path" ]]; then
-  #      print_green "Directory "$path"' exists."
-        return 0  # Path is a directory
-    else
-        print_red "Directory '$path' not found. Make sure to add the complete path."
-        return 1  # Path is not a directory
-    fi
-}
-
-# Function to prompt for the directory path to the local repository
-go_to_repo() {
-    while true; do
-        print_dirpath_blue "Enter directory path:"
-
-        if [[ -z "$user_input" ]]; then
-            echo "The path to your repository cannot be empty. Please provide a directory path."
-        else
-            if is_valid_directory; then
-                print_green "Valid directory found: '$user_input' "
-                break  # Exit the loop as valid directory input is provided
-            else
-                print_red "Directory '$user_input' does not exist or is not a directory."
-                user_input=""  # Clear user_input to prompt again
-                # Uncomment the next line if you want to prompt again here
-                print_dirpath_blue "Enter directory path:"  # Prompt again
-            fi
-        fi
-        
-    done
-    # Create Release.gpg & InRelease
-    sign_release
-}
-
-# Function to confirm current directory
-confirm_current_directory() {
-
-    print_orange "Now let's see if we are in the right directory"
+# Function to add GPG key to apt-key store
+add_key_to_apt() {
+    local key_name="$1"
+    print_orange "Adding GPG key $key_id to apt-key store..."
+    run_with_sudo apt-key add "${kerray[0]}.key"
+    print_green "GPG key added to apt-key store."
     echo ""
 
-    read -p $'\033[34mIs this the directory where your repository should be signed? (y/n): '"$current_directory"$'\033[0m)' confirm_dir
-
-    case "$confirm_dir" in
-        y|Y)
-            print_green "Confirmed. Proceeding with signing Repository files."
-            echo ""
-            ;;
-        n|N)
-            print_blue "For local repository change directory"
-            go_to_repo
-            echo ""
-            exit 0
-            ;;
-        *)
-            print_red "Invalid choice. Try again..."
-            confirm_current_directory
-            ;;
-    esac
-    
-    # Create Release.gpg & InRelease
+    # Continue with signing the release
     sign_release
 }
-
-
-# Part 2 Create Signatures
-#######################################################################################################
-# Part 1 Create key
 
 # Create key unsuccessful loop
 handle_gpg_success() {
@@ -326,13 +262,13 @@ handle_gpg_success() {
     done
     
     
-    if [[ "$gpg_success" == "n" && attempts -lt 2 ]]; then
+    if [[ "$gpg_success" == "y" && attempts -lt 2 ]]; then
         create_public_key
-    elif [[ "$gpg_success" == "n" && attempts -eq 2 ]]; then
-        print_red "You gpg failed. Check if it  is installed and functioning. This is outside the scope of this script!"
+    elif [[ "$gpg_success" == "y" && attempts -eq 2 ]]; then
+        print_red "Your gpg failed. Check if it  is installed and functioning. This is outside the scope of this script!"
         exit
     
-    elif [[ "$gpg_success" == "y" && attempts -lt 2 ]]; then
+    elif [[ "$gpg_success" == "n" && attempts -lt 2 ]]; then
         # Confirm current directory
         confirm_current_directory
         echo ""  # Optional newline for readability or spacing
@@ -351,22 +287,14 @@ create_public_key() {
     
     # Export the key
     if [ -n "$key_id" ]; then
-        gpg --export --armor "$key_id" > "$key_name.gpg"
-        print_green "Public key exported as $key_name.gpg"
+        gpg -a --export "$key_id" "$key_name.key"
+        print_green "Public key exported as $key_name.key"
     else
         print_red "Invalid key name. Export aborted."
         exit 1
     fi
 
-    # Convert to .gpg key
-    # gpg --output "$key_name.gpg" --armor "$key_name.key"
-    # print_green "Public key converted to $key_name.gpg"
-
-    # Remove .key file
-    # rm -f "$key_name.key"
-    
     # Confirm success
-    print_green "Exported key $key_name.key removed."
     read -p $'\033[34mDoes gpg show any errors? (N/Y): \033[0m' gpg_success
     gpg_success=$(echo "$gpg_success" | tr '[:upper:]' '[:lower:]')
 
@@ -381,11 +309,18 @@ create_key_name() {
        read -p $'\033[34m Enter a name for your public key (For example: [directoryname-machinename]): \033[0m' key_name 
 
         if [[ -n "$key_name" ]]; then
+            
+            # Place key_name in array to survive
             kerray+=("$key_name")
-            print_green "Key name provided: $key_name"
+            print_green "Key name provided: $key_name /n"
+            echo ""
+            print_orange "We'll now create a public key next. A passphrase is NOT mandatory /n"
+            echo ""
             break  # Exit the loop if a key name is provided
         else
-            echo "Key name cannot be empty. Please provide a valid name."
+            print_red "Key name cannot be empty. Please provide a valid name."
+            echo ""
+            echo ""
         fi
     done
     create_public_key
@@ -396,57 +331,68 @@ confirm_public_key() {
     local key_name
     local key_id
     local kerray=()
-    
-    # Change directory to the specified path
-    cd "$dir_path" || { echo "Failed to change directory to $dir_path"; exit 1; }
 
-    read -p $'\033[34mEnter the name of your public key (without the .gpg extension): \033[0m' key_name
+    read -p $'\033[34mEnter the name of your exported key, without the extension (.key): \033[0m' key_name
     
     if [[ "$key_name" == "Release" ]]; then
         print_red "The Reasle.gpg is not a public key. It is the signature of the Release file."
+        echo ""
         confirm_public_key
     fi
     
 
     if [[ -n "$key_name" ]]; then
         kerray+=("$key_name")
-        print_green "Key name provided: $kerray.gpg"
+        print_green "Key name provided: $(pwd)/$kerray.key"
+        echo ""
 
         # Verify if the key is a valid public key
-        import_output=$(gpg --import "$key_name.gpg" 2>&1)
+        import_output=$(gpg --import "$(pwd)/$kerray.key" 2>&1)
+        # echo $import_output
         
         if echo "$import_output"; then
-        print_green "Public key verified: $key_name.gpg"
-            
-            # Capture the key_id from the gpg import process
-#            key_id=$(gpg --with-colons --list-keys | grep "^pub" | grep -oE "[A-F0-9]{8,16}")
+        
             # Extract the key ID (fingerprint)
             key_id=$(echo "$import_output" | grep "^gpg: key " | sed -E 's/^gpg: key ([A-F0-9]+):.*/\1/')
+            # echo "$key_id" for debugging script
             
-            # Capture the key_id from the user
-#           read -p $'\033[34mCopy and paste the key_id (fingerprint) for this key: \033[0m' key_id
+            # Capture the key_id from the user (emergency use only!!!!)
+            # read -p $'\033[34mCopy and paste the key_id (fingerprint) for this key: \033[0m' key_id
 
              if [[ -n "$key_id" ]]; then
+                # Key verifies
                 print_green "Key ID found: $key_id"
-                # Proceed to confirm_current_directory
-                confirm_current_directory
-
-                # Continue with signing the release
-                # sign_release "$key_id"
+                print_green "Public key verified: $key_name.key"
+                
+                # Go to apt-key Adding
+                add_key_to_apt
+                echo ""
+                
             else
                 print_red "Failed to retrieve key ID."
+                echo ""
+                read_with_timeout 20 "Is your prepared key-pair oke?"  # Restart the process
+                echo ""
+                echo ""
             fi
         else
             print_red "The key $key_name does not exist or is not a valid public key."
+            echo ""
             confirm_public_key  # Restart the process
         fi
     else
         print_red "Invalid input. Create a new one or start again (Ctrl + c)"
+        echo ""
         create_key_name  # Restart the process
     fi
 }
 
 
+
+
+# Part 2 Confirm existing or Create, export and add gpg key-pair
+################################################################################################################
+# Part 1 Directory confirmation
 
 # Function to display countdown and read user input
 read_with_timeout() {
@@ -473,9 +419,6 @@ read_with_timeout() {
         ((remaining--))
     done
     
-    # Clear the line after countdown ends
-    printf "\r%-${COLUMNS}s\r" ""
-
     # If no input received, set user_choice to empty string
     if [ -z "$user_choice" ]; then
         user_choice=""
@@ -484,10 +427,13 @@ read_with_timeout() {
     # Case statement to handle user_choice
     case "$user_choice" in
         y|Y)
-            print_orange "Let's find out if youor public key can be used for signing"
             echo ""
+            print_orange "Let's find out if your public key can be used for signing"
+            echo ""
+            echo ""
+            print_red "Press Enter to continue..."
+            read
             confirm_public_key
-            echo ""
             ;;
         n|N)
             print_orange "Let's create a key to sign the repository"
@@ -500,10 +446,81 @@ read_with_timeout() {
             echo "Thanks for using my script."
             ;;
     esac
+}
+
+is_valid_directory() {
+    local path="$dir_path"
+    print_orange "Checking directory: "$path" "
+    if [[ -d "$path" ]]; then
+  #      print_green "Directory "$path"' exists."
+        return 0  # Path is a directory
+    else
+        print_red "Directory '$path' not found. Make sure to add the complete path."
+        return 1  # Path is not a directory
+    fi
+}
+
+# Function to prompt for the directory path to the local repository
+go_to_repo() {
+    while true; do
+        print_dirpath_blue "Enter directory path:"
+
+        if [[ -z "$dir_path" ]]; then
+            echo "The path to your repository cannot be empty. Please provide a directory path."
+        else
+            if is_valid_directory; then
+                print_green "Valid directory found: '$dir_path' "
+                # Change directory to the specified path
+                cd "$dir_path" || { print_red "Failed to change directory to $dir_path"; exit 1; }
+                echo ""
+                break  # Exit the loop as valid directory input is provided
+            else
+                print_red "Directory '$dir_path' does not exist or is not a directory."
+                user_input=""  # Clear user_input to prompt again
+                # Uncomment the next line if you want to prompt again here
+                print_dirpath_blue "Enter directory path:"  # Prompt again
+            fi
+        fi
+    done
     
+    # Chose prepared key (format is armored *.key) or generate a new key
+    read_with_timeout 20 "Did you create a key to sign the Repository and is it exported (armored) to this directory?"
+    echo ""
+    echo ""
+}
+
+# Function to confirm current directory
+confirm_current_directory() {
+
+    print_orange "We have to work from the directory we want to sign"
+    echo ""
+
+    read -p $'\033[34mIs this the directory where your repository should be signed? (y/n): '"$current_directory"$'\033[0m)' confirm_dir
+
+    case "$confirm_dir" in
+        y|Y)
+            print_green "Confirmed. Proceeding with signing Repository files."
+            echo ""
+            ;;
+        n|N)
+            print_blue "For local repository change directory"
+            go_to_repo
+            echo ""
+            exit 0
+            ;;
+        *)
+            print_red "Invalid choice. Try again..."
+            confirm_current_directory
+            ;;
+    esac
+    
+    # Create Release.gpg & InRelease
+    # sign_release
+    read_with_timeout 20 "Did you create a key to sign the Repository and is it exported (armored) to this directory?"
 }
 
 
-# Main script
-# Call the function to prompt user for input with a timeout of 20 seconds
-read_with_timeout 20 "Do you want to create a signed repository? (y/n): "
+## Start of the main script
+print_orange "First let's double-check the correct repository directory"
+echo ""
+confirm_current_directory
